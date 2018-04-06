@@ -310,12 +310,16 @@ class Engine:
     def get_db(self, database_name):
         """
         Creates instance of the database and connector for it.
-
+        If no database exists it will be created.
         :param database_name: name of the database to connect.
         :return: `Database` instance
         """
         path = self._get_path(database_name)
         db = Database(database_name, path, self)
+        try:
+            db.records()
+        except FileNotFoundError:
+            self.create_db(database_name)
         self.connections[id(db)] = (id(db), database_name, path)
         log.info('Created connector for database [{}]'.format(database_name))
         return db
