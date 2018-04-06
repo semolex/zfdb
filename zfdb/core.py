@@ -5,7 +5,7 @@ import shutil
 import warnings
 import zipfile as _zip
 
-import exceptions as exc
+import zfdb.exceptions as exc
 
 logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.INFO)
 log = logging.getLogger(__name__)
