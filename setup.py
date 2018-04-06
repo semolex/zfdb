@@ -3,7 +3,7 @@ from setuptools import setup
 setup(
     name='zfdb',
     version='0.1',
-    packages=[],
+    packages=['zfdb'],
     url='https://github.com/semolex/zfdb',
     license='MIT',
     author='semolex (Oleksii Semeshchuk)',
