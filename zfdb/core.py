@@ -304,6 +304,7 @@ class Engine:
             raise exc.NoSuchDatabaseError(
                 'No such database: [{}]'.format(database_obj.name))
         del database_obj
+        self.databases = self._list_databases()
         return True
 
     def get_db(self, database_name):
