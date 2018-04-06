@@ -88,4 +88,5 @@ zfdb.exceptions.ConnectorError: No open connectors found for database
 ### Future release plans
 * Add bulk operations for insert, delete, update
 * Optimize file operations
+* Add different operations for `Record` class and ability to store records.
 * Different updates that might be usefull
