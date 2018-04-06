@@ -168,7 +168,7 @@ class Engine:
         :param tmp: path to the temporary folder
         :param existing: list of existing files in the database to rebuild.
         """
-        with _zip.ZipFile(tmp_db, 'x') as z:
+        with _zip.ZipFile(tmp_db, 'w') as z:
             z.close()
         with _zip.ZipFile(tmp_db, 'a') as z:
             fl = [os.path.join(tmp, rec) for rec in existing]
