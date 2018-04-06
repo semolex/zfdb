@@ -168,7 +168,7 @@ class Engine:
         :param tmp: path to the temporary folder
         :param existing: list of existing files in the database to rebuild.
         """
-        with _zip.ZipFile(tmp_db, 'w') as z:
+        with _zip.ZipFile(tmp_db, 'x') as z:
             z.close()
         with _zip.ZipFile(tmp_db, 'a') as z:
             fl = [os.path.join(tmp, rec) for rec in existing]
@@ -207,8 +207,10 @@ class Engine:
                 raise exc.RecordNotExists(
                     'Record [{}] not exists in database [{}]'.format(
                         record_name, database_name))
-
-            mode = 'a'
+            if isinstance(data, bytes):
+                mode = 'ba'
+            else:
+                mode = 'a'
             with open(os.path.join(tmp, record_name), mode) as _f:
                 _f.write(data)
             self._recreate(tmp_db, tmp, existing)
