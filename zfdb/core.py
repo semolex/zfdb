@@ -207,10 +207,8 @@ class Engine:
                 raise exc.RecordNotExists(
                     'Record [{}] not exists in database [{}]'.format(
                         record_name, database_name))
-            if isinstance(data, bytes):
-                mode = 'ba'
-            else:
-                mode = 'a'
+
+            mode = 'a'
             with open(os.path.join(tmp, record_name), mode) as _f:
                 _f.write(data)
             self._recreate(tmp_db, tmp, existing)
