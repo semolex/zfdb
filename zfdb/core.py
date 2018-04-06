@@ -321,7 +321,7 @@ class Engine:
             db.records()
         except FileNotFoundError:
             self.create_db(database_name)
-
+        self.databases = self._list_databases()
         log.info('Created connector for database [{}]'.format(database_name))
         return db
 
