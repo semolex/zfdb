@@ -316,11 +316,12 @@ class Engine:
         """
         path = self._get_path(database_name)
         db = Database(database_name, path, self)
+        self.connections[id(db)] = (id(db), database_name, path)
         try:
             db.records()
         except FileNotFoundError:
             self.create_db(database_name)
-        self.connections[id(db)] = (id(db), database_name, path)
+
         log.info('Created connector for database [{}]'.format(database_name))
         return db
 
