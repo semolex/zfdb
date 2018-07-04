@@ -25,7 +25,7 @@ To install package, use *pip*:
 
 ```python 
 >>> from zfdb.core import Engine
->>> eng = Engine('./')   # Creates engine that tracks passes storage folder
+>>> eng = Engine('./')   # Creates engine that tracks passed storage folder
 >>> eng.databases  # List existing databases in the storage
 []
 >>> db = eng.get_db('my_db')  # Creates new database or connects to existing
@@ -35,15 +35,15 @@ INFO: Created connector for database [my_db]
 ['my_db']
 >>> db.records() # List all records inside database.
 []
->>> db.insert('new_record', '1')  # Iitializes new record inside database.
+>>> db.insert('new_record', '1')  # Initializes new record inside database.
 INFO: Record [new_record] inserted into [my_db] database
 True
 >>> db.records()  # New record in now present at database.
 ['new_record']
->>> rec = db.find('new_record')  # Fetched data from passed record. Also list of record names can be used.
+>>> rec = db.find('new_record')  # Fetches data from passed record. Also list of record names can be used.
 INFO: Fetched [1] records from [my_db]
 >>> rec
-[<zfdb.core.Record object at 0x1027a7eb8>]  # Result is the list of "Record" objects. Those objects are wrappers around raw data and additional ifo about record.
+[<zfdb.core.Record object at 0x1027a7eb8>]  # Result is the list of "Record" objects. Those objects are wrappers around raw data and additional info about record.
 >>> rec[0].raw() # Show raw data
 b'1'
 >>> rec[0].to_text()  # Attempt to convert data into text
