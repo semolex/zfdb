@@ -308,7 +308,7 @@ def test_record_updates(db):
     for i in range(10):
         # Current state
         before_update = db.get(f"bulk{i}").json
-
+        assert before_update["number"] == i
         # Update
         new_data = {"key": f"value{i}", "number": i + 100}
         db.update(f"bulk{i}", json.dumps(new_data))
