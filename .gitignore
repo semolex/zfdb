@@ -99,3 +99,8 @@ ENV/
 
 # mypy
 .mypy_cache/
+
+# Project-specific
+pyrightconfig.json
+.DS_Store
+.idea/

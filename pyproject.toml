@@ -1,0 +1,52 @@
+[tool.poetry]
+name = "zfdb"
+version = "0.1.1"
+description = "Simple interface to the ZIP files to use them as a database"
+authors = ["Oleksii <semolex@live.com>"]
+license = "MIT"
+readme = "README.md"
+homepage = "https://github.com/semolex/zfdb"
+repository = "https://github.com/semolex/zfdb"
+keywords = [ "db", "key-value", "zip", "python", "database", "filesystem", "file", "storage",
+             "zipfile-database", "zipfile-db", "zip-db", "zip-database", "zipfile-storage", "zip-storage"
+           ]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Topic :: Database",
+    "Topic :: Database :: Database Engines/Servers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Archiving",
+    "Topic :: System :: Filesystems",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "License :: OSI Approved :: MIT License",
+    "Natural Language :: English",
+    "Typing :: Typed"
+]
+packages = [
+    { include = "zfdb"}
+]
+exclude = [
+    "tests/*",
+    "tests/**/*",
+    "**/tests/*",
+]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.3"
+black = "^24.10.0"
+isort = "^5.13.2"
+mypy = "^1.13.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

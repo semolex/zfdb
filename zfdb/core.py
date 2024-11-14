@@ -1,483 +1,351 @@
-import os
-import logging
-import tempfile
+import base64
+import hashlib
+import json
 import shutil
-import warnings
-import zipfile as _zip
+import tempfile
+import zipfile
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
-import zfdb.exceptions as exc
 
-logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.INFO)
-log = logging.getLogger(__name__)
+class DatabaseError(Exception):
+    """Base exception for database operations"""
+
+    pass
 
 
-class Database:
-    """
-    Class that represents database.
-    Uses passed engine to perform operations with data.
-    """
+class SecurityError(DatabaseError):
+    """Security related exceptions"""
 
-    def __init__(self, name, path, engine):
+    pass
+
+
+class RecordError(DatabaseError):
+    """Record related exceptions"""
+
+    pass
+
+
+@dataclass
+class DatabaseConfig:
+    """Configuration for database instance"""
+
+    name: str
+    path: Path
+    password: Optional[str] = None
+    compression_level: int = 6
+    max_size: int = 1024 * 1024  # 1 MB
+    auto_compact: bool = True
+    version: str = "1.0.0"
+
+    @staticmethod
+    def from_dict(data: Dict[str, Any]) -> "DatabaseConfig":
         """
-        Initializes database instance.
+        Create a DatabaseConfig instance from a dictionary.
 
-        :param name: name of the database
-        :param path: path to the database file
-        :param engine: engine that used to perform operations with database
+        :param data: Dictionary with configuration data
+        :return: DatabaseConfig instance
         """
-        self.name = name
-        self.path = path
-        self.engine = engine
+        return DatabaseConfig(
+            name=data["name"],
+            path=Path(data["path"]),
+            password=data.get("password"),
+            compression_level=data.get("compression_level", 6),
+            max_size=data.get("max_size", 1024 * 1024),
+            auto_compact=data.get("auto_compact", True),
+            version=data.get("version", "1.0.0"),
+        )
 
-    def records(self):
-        """
-        Lists all existing records in database
 
-        :return: list with records names
-        """
-        return self.engine.list_records(self)
+class SimpleEncryption:
+    """Simple encryption using XOR with a key derived from password"""
 
-    def find(self, records=None):
-        """
-        Performs search for passed record names.
-        Record names can be sequences of string or string with one record name.
+    def __init__(self, password: Optional[str] = None):
+        self.key: Optional[bytes] = None
+        if password:
+            # Create a repeatable key from password using SHA-256
+            key_hash = hashlib.sha256(password.encode()).digest()
+            self.key = key_hash
+        else:
+            self.key = None
 
-        :param records: sequence of names or string with record name to find
-        :return: list of `Records` objects with found result or None
-        """
-        return self.engine.read_records(self, records)
+    def encrypt(self, data: bytes) -> bytes:
+        """Encrypt data using XOR with key"""
+        if not self.key:
+            return data
 
-    def insert(self, record_name, data):
-        """
-        Inserts new record into database.
+        key_bytes = self.key * (len(data) // len(self.key) + 1)
+        key_bytes = key_bytes[: len(data)]
 
-        :param record_name: name for the record to store
-        :param data: data to store inside the record (bytes or string)
-        :return: True if success else can raise exception
-        """
-        return self.engine.write_record(self, record_name, data)
+        encrypted = bytes(a ^ b for a, b in zip(data, key_bytes))
+        return base64.b64encode(encrypted)
 
-    def update(self, record_name, data, rebuild=False):
-        """
-        Updates record inside database.
+    def decrypt(self, data: bytes) -> bytes:
+        """Decrypt data using XOR with key"""
+        if not self.key:
+            return data
 
-        :param record_name: name of the record to update
-        :param data: data to update record
-        :param rebuild: indicates whether to rebuild database (see docs)
-        :return: True if success else can raise exception
-        """
+        data = base64.b64decode(data)
+        key_bytes = self.key * (len(data) // len(self.key) + 1)
+        key_bytes = key_bytes[: len(data)]
 
-        return self.engine.update_record(self, record_name, data, rebuild)
-
-    def delete(self, record_name):
-        """
-        Deletes record inside database.
-
-        :param record_name: name of the record to delete
-        :return: True of success else can raise exception
-        """
-        return self.engine.remove_record(self, record_name)
-
-    def drop(self):
-        """
-        Drops database and removed all related files and data.
-
-        :return: True if success else can raise exception
-        """
-        return self.engine.drop_database(self)
-
-    def count(self):
-        """
-        Return count of the records inside database.
-
-        :return: number of record in the database
-        """
-        return len(self.engine.list_records(self))
-
-    def close(self):
-        """
-        Closes connector to the database, avoiding further operations
-        until opened again.
-        """
-        self.engine.drop_connectors(self)
+        return bytes(a ^ b for a, b in zip(data, key_bytes))
 
 
 class Record:
-    """
-    Class that wraps fetched data inti class to have ability store it as object
-    with different representation of data.
-    """
+    """Enhanced record class with metadata and encryption support"""
 
-    def __init__(self, record_name, raw_data):
-        """
-        Initializes Record instance.
+    def __init__(
+        self,
+        name: str,
+        data: Union[bytes, str],
+        metadata: Optional[Dict[str, Any]] = None,
+        encryption: Optional[SimpleEncryption] = None,
+    ):
+        self.name = name
+        self._raw_data = data if isinstance(data, bytes) else data.encode("utf-8")
+        self.metadata = metadata or {}
+        self.metadata.update(
+            {
+                "created_at": datetime.utcnow().isoformat(),
+                "size": len(self._raw_data),
+                "checksum": self._calculate_checksum(),
+            }
+        )
+        self._encryption = encryption
 
-        :param record_name: name of the fetched record
-        :param raw_data: raw representation of stored data
-        """
-        self.record_name = record_name
-        self._raw_data = raw_data
+    def _calculate_checksum(self) -> str:
+        """Calculate SHA-256 checksum of the data"""
+        return hashlib.sha256(self._raw_data).hexdigest()
 
-    def raw(self):
-        """
-        Returns raw representation of data of the record.
-
-        :return: raw data
-        """
+    @property
+    def raw(self) -> bytes:
+        """Get raw bytes data"""
+        if self._encryption:
+            return self._encryption.decrypt(self._raw_data)
         return self._raw_data
 
-    def to_text(self):
-        """
-        Returns text representation of data of the record if possible.
-        Uses `utf-8` to decode data.
+    @property
+    def text(self) -> str:
+        """Get text representation of data"""
+        return self.raw.decode("utf-8")
 
-        :return: text representation of data of the record
-        """
-        return self._raw_data.decode('utf-8')
+    @property
+    def json(self) -> Any:
+        """Get JSON parsed data if possible"""
+        return json.loads(self.text)
+
+    def validate(self) -> bool:
+        """Validate record integrity"""
+        return self._calculate_checksum() == self.metadata.get("checksum")
 
 
-class Engine:
-    """
-    Class that utilizes file operations with ZIP archives.
-    """
+class Database:
+    """Enhanced database class with security and advanced features"""
 
-    def __init__(self, storage):
-        """
-        Initializes engine.
-        If no databases found in folded, new one can be created.
-        Dict with available connectors is stored in `connections` attr.
-        List of available databases is stored in `databases` attr.
-        List of rebuild modes is stored in `rebuild_modes` attr.
+    def __init__(self, config: DatabaseConfig):
+        self.config = config
+        self.path = Path(config.path)
+        self._encryption = (
+            SimpleEncryption(config.password) if config.password else None
+        )
+        self._validate_or_create()
 
-        :param storage: path to the databases folder.
-         """
+    def _validate_or_create(self):
+        """Validate database file or create new one"""
+        if not self.path.exists():
+            self._create_new_database()
+        elif not zipfile.is_zipfile(self.path):
+            raise DatabaseError(f"Invalid database file: {self.path}")
+        self._validate_size()
 
-        self.storage = storage
-        self.connections = {}
-        self.databases = self._list_databases()
-        self.rebuild_modes = ['recreate', 'delete', 'update']
+    def _create_new_database(self):
+        """Create new database with metadata"""
+        with zipfile.ZipFile(
+            self.path,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=self.config.compression_level,
+        ) as zf:
+            metadata = {
+                "created_at": datetime.utcnow().isoformat(),
+                "version": self.config.version,
+                "encryption": bool(self._encryption),
+            }
+            zf.writestr("__metadata__.json", json.dumps(metadata))
 
-    @staticmethod
-    def _recreate(tmp_db, tmp, existing):
-        """
-        Perform recreation database.
-        Copy all extracted files in the temporary folder and recreates them in
-        the database with same name as previous database.
+    def _validate_size(self):
+        """Check if database size exceeds limit"""
+        if self.path.stat().st_size > self.config.max_size:
+            raise DatabaseError(
+                f"Database exceeds size limit of {self.config.max_size} bytes"
+            )
 
-        :param tmp_db: temporary database path
-        :param tmp: path to the temporary folder
-        :param existing: list of existing files in the database to rebuild.
-        """
-        with _zip.ZipFile(tmp_db, 'x') as z:
-            z.close()
-        with _zip.ZipFile(tmp_db, 'a') as z:
-            fl = [os.path.join(tmp, rec) for rec in existing]
-            for rec in fl:
-                z.write(rec, arcname=rec.split('/')[-1])
+    def insert(
+        self, name: str, data: Union[bytes, str], metadata: Optional[Dict] = None
+    ) -> Record:
+        """Insert new record with optional metadata"""
+        record = Record(name, data, metadata, self._encryption)
 
-    def _rebuild(self, database_name, rebuild_mode, record_name=None,
-                 data=None):
-        """
-        Perform rebuild via passed mode and parameters.
-        Existing database will be replaced after rebuild.
+        with zipfile.ZipFile(self.path, "a", compression=zipfile.ZIP_DEFLATED) as zf:
+            if f"data/{name}" in zf.namelist():
+                raise RecordError(f"Record {name} already exists")
 
-        :param database_name: name of the database to rebuild
-        :param rebuild_mode: rebuild mode
-        :param record_name: name of the record, required for some modes
-        :param data: data for the record, required for some modes
-        """
-        path = self._get_path(database_name)
-        if not rebuild_mode or rebuild_mode not in self.rebuild_modes:
-            raise ValueError('Unknown rebuild mode. Available modes: {}'.format(
-                self.rebuild_modes))
-        tmp = tempfile.mkdtemp()
-        with _zip.ZipFile(path, 'r') as z:
-            existing = set(z.namelist())
-            z.extractall(tmp)
-        tmp_db = os.path.join(tmp, database_name + '.zip')
-        if rebuild_mode == 'recreate':
-            self._recreate(tmp_db, tmp, existing)
+            # Store data and metadata
+            encrypted_data = record._raw_data
+            if self._encryption:
+                encrypted_data = self._encryption.encrypt(encrypted_data)
 
-        elif rebuild_mode == 'update':
-            if not record_name or not data:
-                raise exc.RebuildFailedException(
-                    '[{}] mode requires "record_name" and "data" parameters'.format(
-                        rebuild_mode))
-            if record_name not in existing:
-                raise exc.RecordNotExists(
-                    'Record [{}] not exists in database [{}]'.format(
-                        record_name, database_name))
-            if isinstance(data, bytes):
-                mode = 'ba'
-            else:
-                mode = 'a'
-            with open(os.path.join(tmp, record_name), mode) as _f:
-                _f.write(data)
-            self._recreate(tmp_db, tmp, existing)
+            zf.writestr(f"data/{name}", encrypted_data)
+            zf.writestr(f"metadata/{name}.json", json.dumps(record.metadata))
 
-        elif rebuild_mode == 'delete':
-            if not record_name:
-                raise exc.RebuildFailedException(
-                    '[{}] mode requires "record_name" parameter'.format(
-                        rebuild_mode))
-            if record_name not in existing:
-                raise exc.RecordNotExists(
-                    'Record [{}] not exists in database [{}]'.format(
-                        record_name, database_name))
-            os.remove(os.path.join(tmp, record_name))
-            existing = set(i for i in existing if i != record_name)
-            self._recreate(tmp_db, tmp, existing)
+        return record
 
-        shutil.move(tmp_db, path)
-        shutil.rmtree(tmp, ignore_errors=True)
-        log.info(
-            'Rebuild complete for [{}] database with [{}] mode'.format(
-                database_name,
-                rebuild_mode))
+    def get(self, name: str) -> Optional[Record]:
+        """Retrieve a record by name"""
+        with zipfile.ZipFile(self.path, "r") as zf:
+            try:
+                data_path = f"data/{name}"
+                metadata_path = f"metadata/{name}.json"
 
-    def _get_path(self, database_name):
-        """
-        Creates path to the passed database name inside the storage path.
+                # Read data and metadata
+                data = zf.read(data_path)
+                metadata = json.loads(zf.read(metadata_path))
 
-        :param database_name: name of the database to build path
-        :return: path to the database
-        """
-        path = os.path.join(self.storage, '{}.zip'.format(database_name))
-        return path
+                # Create and return record
+                record = Record(name, data, metadata, self._encryption)
+                return record
+            except KeyError:
+                return None
+            except Exception as e:
+                raise DatabaseError(f"Failed to read record {name}: {str(e)}")
 
-    def _validate_connection(self, database_obj):
-        """
-        Validates if connector to the database exists.
-        If no connectors found, raises `ConnectorError` to avoid further
-        operation with database until connected again.
+    def update(
+        self, name: str, data: Union[bytes, str], metadata: Optional[Dict] = None
+    ) -> Record:
+        """Update an existing record with proper preservation of all records"""
+        # First, verify record exists
+        existing_record = self.get(name)
+        if not existing_record:
+            raise RecordError(f"Record {name} does not exist")
 
-        :param database_obj: database instance
-        """
+        # Create new metadata or update existing
+        new_metadata = existing_record.metadata.copy() if metadata is None else metadata
+        new_metadata.update(
+            {
+                "updated_at": datetime.utcnow().isoformat(),
+                "previous_checksum": existing_record.metadata.get("checksum"),
+                "size": len(data if isinstance(data, bytes) else data.encode("utf-8")),
+            }
+        )
 
-        if not id(database_obj) in self.connections:
-            raise exc.ConnectorError('No open connectors found for database')
+        # Create new record
+        new_record = Record(name, data, new_metadata, self._encryption)
 
-    def _list_databases(self):
-        """
-        List all available databases in the storage.
+        # Prepare data for storage
+        encrypted_data = new_record._raw_data
+        if self._encryption:
+            encrypted_data = self._encryption.encrypt(encrypted_data)
 
-        :return: list of databases
-        """
+        temp_path = Path(tempfile.mktemp())
 
-        databases = []
-        db_list = [f for f in os.listdir(self.storage) if os.path.isfile(
-            os.path.join(self.storage, f)) and f.endswith('.zip')]
-        for n in db_list:
-            databases.append(n.split('.zip')[0])
-        return databases
-
-    def create_db(self, database_name):
-        """
-        Creates new empty database with given name inside the storage path.
-        If database with such name already exists, raises `DatabaseExists`
-        exception.
-        :param database_name: name of the database to create.
-        """
-
-        path = self._get_path(database_name)
         try:
-            with _zip.ZipFile(path, 'x') as z:
-                z.close()
-            log.info('DB created: [{}]'.format(database_name))
-        except FileExistsError:
-            raise exc.DatabaseExists(
-                'Database [{}] already exists'.format(database_name))
+            # Create new zip file with all existing content plus updated record
+            with zipfile.ZipFile(self.path, "r") as src_zip:
+                # Get list of all files excluding the ones we're updating
+                files_to_copy = [
+                    f
+                    for f in src_zip.namelist()
+                    if not (f == f"data/{name}" or f == f"metadata/{name}.json")
+                ]
 
-    def drop_database(self, database_obj):
-        """
-        Destroys database with all data and drops connector for it.
+                with zipfile.ZipFile(
+                    temp_path,
+                    "w",
+                    compression=zipfile.ZIP_DEFLATED,
+                    compresslevel=self.config.compression_level,
+                ) as dst_zip:
+                    # Copy existing files
+                    for item in files_to_copy:
+                        dst_zip.writestr(item, src_zip.read(item))
 
-        :param database_obj: database instance which that must be deleted
-        :return: True if success else can raise exception.
-        """
-        self._validate_connection(database_obj)
-        log.info('Dropping database: [{}]'.format(database_obj.name))
-        self.drop_connectors(database_obj)
-        try:
-            os.remove(database_obj.path)
-        except FileNotFoundError:
-            raise exc.NoSuchDatabaseError(
-                'No such database: [{}]'.format(database_obj.name))
-        del database_obj
-        self.databases = self._list_databases()
+                    # Write updated record and metadata
+                    dst_zip.writestr(f"data/{name}", encrypted_data)
+                    dst_zip.writestr(
+                        f"metadata/{name}.json", json.dumps(new_record.metadata)
+                    )
+
+            # Verify the temp file
+            with zipfile.ZipFile(temp_path, "r") as check_zip:
+                all_files = check_zip.namelist()
+                data_files = [f for f in all_files if f.startswith("data/")]
+                assert len(data_files) == len(
+                    set(data_files)
+                ), "Duplicate data files found"
+
+            # Replace original file with updated version
+            shutil.move(str(temp_path), str(self.path))
+            return new_record
+
+        except Exception as e:
+            if temp_path.exists():
+                temp_path.unlink()
+            raise DatabaseError(f"Update failed: {str(e)}")
+
+    def delete(self, name: str) -> bool:
+        """Delete a record"""
+        temp_path = Path(tempfile.mktemp())
+
+        with zipfile.ZipFile(self.path, "r") as src_zip:
+            with zipfile.ZipFile(
+                temp_path,
+                "w",
+                compression=zipfile.ZIP_DEFLATED,
+                compresslevel=self.config.compression_level,
+            ) as dst_zip:
+                for item in src_zip.namelist():
+                    if not (
+                        item.startswith(f"data/{name}")
+                        or item.startswith(f"metadata/{name}")
+                    ):
+                        dst_zip.writestr(item, src_zip.read(item))
+
+        shutil.move(temp_path, self.path)
         return True
 
-    def get_db(self, database_name):
-        """
-        Creates instance of the database and connector for it.
-        If no database exists it will be created.
-        :param database_name: name of the database to connect.
-        :return: `Database` instance
-        """
-        path = self._get_path(database_name)
-        db = Database(database_name, path, self)
-        self.connections[id(db)] = (id(db), database_name, path)
-        try:
-            db.records()
-        except FileNotFoundError:
-            self.create_db(database_name)
-        self.databases = self._list_databases()
-        log.info('Created connector for database [{}]'.format(database_name))
-        return db
+    def list_records(self) -> List[str]:
+        """List all record names"""
+        with zipfile.ZipFile(self.path, "r") as zf:
+            return [
+                name.split("/")[-1]
+                for name in zf.namelist()
+                if name.startswith("data/")
+            ]
 
-    def write_record(self, database_obj, record_name, data):
-        """
-        Writes new record with data inside given database.
+    def search(self, pattern: str) -> List[str]:
+        """Search records by name pattern"""
+        all_records = self.list_records()
+        return [name for name in all_records if pattern in name]
 
-        :param database_obj: database instance
-        :param record_name: name of the record to store
-        :param data: data for the record to store
-        :return: True if success else can raise exception
-        """
+    def compact(self):
+        """Compact database by removing deleted records and optimizing storage"""
+        temp_path = Path(tempfile.mktemp())
 
-        mode = ''
-        if isinstance(data, str):
-            mode = 'w'
-        elif isinstance(data, bytes):
-            mode = 'bw'
-        path = database_obj.path
-        name = database_obj.name
-        self._validate_connection(database_obj)
-        tmp = tempfile.mkstemp()[1]
-        with open(tmp, mode) as _tmp:
-            _tmp.write(data)
+        with zipfile.ZipFile(self.path, "r") as src_zip:
+            with zipfile.ZipFile(
+                temp_path,
+                "w",
+                compression=zipfile.ZIP_DEFLATED,
+                compresslevel=self.config.compression_level,
+            ) as dst_zip:
+                for item in src_zip.namelist():
+                    dst_zip.writestr(item, src_zip.read(item))
 
-        with _zip.ZipFile(path, 'a') as z:
-            records = z.namelist()
-            if record_name in records:
-                raise exc.RecordExists(
-                    'Record [{}] already exists in database [{}]'.format(
-                        record_name, name))
-            z.write(tmp, record_name)
-            os.remove(tmp)
-            log.info(
-                'Record [{}] inserted into [{}] database'.format(record_name,
-                                                                 name))
-            return True
+        shutil.move(temp_path, self.path)
 
-    def update_record(self, database_obj, record_name, data, rebuild=False):
-        """
-        Updates record with new data inside the given database.
-        Supports two scenarions: via simple duplication of the record inside
-        database ot via full recreation of the database with updated record.
-
-        :param database_obj: database instance
-        :param record_name: name of the record to update
-        :param data: data for the record to update
-        :param rebuild: indicates whether to rebuild database (see docs)
-        :return: True if success else can raise exception
-        """
-        self._validate_connection(database_obj)
-        path = database_obj.path
-        name = database_obj.name
-        if rebuild:
-            self._rebuild(name, 'update', record_name, data)
-        else:
-            mode = ''
-            if isinstance(data, str):
-                mode = 'a'
-            elif isinstance(data, bytes):
-                mode = 'ba'
-
-            self._validate_connection(database_obj)
-            _, tmp = tempfile.mkstemp()
-
-            with _zip.ZipFile(path, 'a') as z:
-                records = z.namelist()
-                if record_name not in records:
-                    raise exc.RecordNotExists(
-                        'Record [{}] not exists in database [{}]'.format(
-                            record_name, name))
-                existing_data = self.read_records(database_obj, record_name)[0]
-                with open(tmp, mode) as _tmp:
-                    _tmp.write(existing_data.raw())
-                with open(tmp, mode) as _tmp:
-                    _tmp.write(data)
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    z.write(tmp, record_name)
-                os.remove(tmp)
-        log.info(
-            'Record [{}] updated in [{}] database'.format(record_name,
-                                                          name))
-        return True
-
-    def remove_record(self, database_obj, record_name):
-        """
-        Removes record from database and rebuild database.
-
-        :param database_obj: database instance
-        :param record_name: record name to delete
-        :return: True if success else can raise exception
-        """
-        self._validate_connection(database_obj)
-        self._rebuild(database_obj.name, 'delete', record_name)
-        return True
-
-    def list_connectors(self):
-        """
-        Lists all open connectors.
-
-        :return: dict with available connectors
-        """
-        return self.connections
-
-    def drop_connectors(self, database_obj):
-        """
-        Drop connectors for given database to avoid further operations with it.
-
-        :param database_obj: database instance
-        """
-        name = database_obj.name
-        del self.connections[id(database_obj)]
-        log.info('Closed connector to database [{}]'.format(name))
-
-    def list_records(self, database_obj):
-        """
-        Lists all records inside given database.
-
-        :param database_obj: instance of the database
-        :return: list of records inside database
-        """
-
-        path = database_obj.path
-        self._validate_connection(database_obj)
-        with _zip.ZipFile(path) as z:
-            records = z.namelist()
-            return records
-
-    def read_records(self, database_obj, record_names=None):
-        """
-        Reads records inside given database by using passed names.
-        Returns data from records wrapped with `Record` class.
-
-        :param database_obj: database instance
-        :param record_names: sequence of names or name (seq of string or string)
-        :return: list of `Record` objects or empty list if record not found
-        """
-        self._validate_connection(database_obj)
-        path = database_obj.path
-        name = database_obj.name
-
-        if not record_names:
-            record_names = self.list_records(database_obj)
-        if not hasattr(record_names, '__iter__') or isinstance(
-                record_names, str):
-            record_names = (record_names,)
-        with _zip.ZipFile(path, 'r') as z:
-            result = []
-            for _file in record_names:
-                try:
-                    result.append(Record(record_name=record_names,
-                                         raw_data=z.read(_file)))
-
-                except KeyError:
-                    pass
-            log.info('Fetched [{}] records from [{}]'.format(len(result),
-                                                             name))
-            return result
+    def backup(self, backup_path: Union[str, Path]):
+        """Create a backup of the database"""
+        backup_path = Path(backup_path)
+        shutil.copy2(self.path, backup_path)
